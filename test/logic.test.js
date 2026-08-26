@@ -131,6 +131,8 @@ eq(Logic.filesOf(FILES, 'REQ-001').length, 3, '건별 파일 목록');
 eq(Logic.humanSize(0), '0 B', '0바이트');
 eq(Logic.humanSize(2048), '2.0 KB', 'KB 표기');
 eq(Logic.humanSize(3 * 1024 * 1024), '3.0 MB', 'MB 표기');
+// 브라우저 보관 한도가 GB 단위라 MB 로만 적으면 "2048.0 MB" 가 된다
+eq(Logic.humanSize(2 * 1024 * 1024 * 1024), '2.0 GB', 'GB 표기');
 
 /* ==================================================== 4. 일정 판정 ======= */
 group('4. 일정 — 완료된 건은 지연으로 세지 않는다');
@@ -256,6 +258,43 @@ eq(MAIL.subject, '[부품원가계산서] 123456-100001 붐 실린더 브라켓 
 ok(MAIL.body.indexOf('첨부 산출물 2건') >= 0, '다른 건의 파일은 섞이지 않는다');
 ok(MAIL.body.indexOf('a.xlsx (초안 v1)') >= 0, '파일 목록에 종류·버전이 들어간다');
 ok(Logic.mailtoUrl(MAIL).indexOf('mailto:hanjihye%40hd.example.com?') === 0, 'mailto 주소');
+
+/* ==================== 7-1. 파일 본문 보관·내려받기 ===================== */
+group('7-1. 내려받기 — 사본이 없으면 왜 없는지 말한다');
+
+// 서버에는 본문을 넣지 않는다. 그래도 올린 파일에 다시 닿을 길은 있어야 한다.
+eq(Logic.downloadAction({ link: '' }, true).kind, 'local', '사본이 있으면 바로 내려받는다');
+eq(Logic.downloadAction({ link: 'https://teams.example.com/a.xlsx' }, false).kind, 'link',
+   '사본이 없어도 원본 위치가 있으면 그리로 보낸다');
+eq(Logic.downloadAction({ link: 'https://teams.example.com/a.xlsx' }, false).href,
+   'https://teams.example.com/a.xlsx', '주소를 그대로 넘긴다');
+eq(Logic.downloadAction({}, false).kind, 'none', '둘 다 없으면 없다고 한다');
+ok(Logic.downloadAction({}, false).reason.indexOf('사본이 없고') >= 0,
+   '눌러도 아무 일 없는 버튼 대신 사유를 준다');
+
+// 이 값은 href 에 그대로 들어간다 — 목록을 여는 사람의 브라우저에서 코드가 돌면 안 된다
+eq(Logic.isSafeLink('https://x.example.com/a'), true, 'https 는 받는다');
+eq(Logic.isSafeLink('http://x.example.com/a'), true, 'http 도 받는다');
+eq(Logic.isSafeLink('javascript:alert(1)'), false, 'javascript: 는 막는다');
+eq(Logic.isSafeLink('file:///etc/passwd'), false, 'file: 는 막는다');
+eq(Logic.isSafeLink('  https://x.example.com  '), true, '앞뒤 공백은 무시한다');
+eq(Logic.isSafeLink(''), false, '빈 값은 주소가 아니다');
+eq(Logic.downloadAction({ link: 'javascript:alert(1)' }, false).kind, 'none',
+   '수상한 주소는 링크로 만들지 않는다');
+ok(Logic.downloadAction({ link: 'javascript:alert(1)' }, false).reason.indexOf('http(s)') >= 0,
+   '왜 막혔는지 알려 준다');
+
+// 브라우저 사본은 무한정 담을 수 없다
+ok(Logic.canKeepLocalCopy(5 * 1024 * 1024, 0).ok, '5MB 짜리는 사본을 둔다');
+eq(Logic.canKeepLocalCopy(30 * 1024 * 1024, 0).ok, false, '한 개 한도를 넘으면 두지 않는다');
+eq(Logic.canKeepLocalCopy(5 * 1024 * 1024, 2 * 1024 * 1024 * 1024).ok, false,
+   '전체 한도를 넘으면 두지 않는다');
+eq(Logic.canKeepLocalCopy(0, 0).ok, false, '빈 파일은 두지 않는다');
+ok(Logic.canKeepLocalCopy(30 * 1024 * 1024, 0).reason.indexOf('25.0 MB') >= 0,
+   '한도를 사람이 읽는 단위로 알려 준다');
+eq(Logic.canKeepLocalCopy(5 * 1024 * 1024, 299 * 1024 * 1024).ok, true,
+   '전체 한도가 2GB 라 300MB 쯤은 아직 여유가 있다');
+ok(Logic.COPY_LIMIT.perFile < Logic.COPY_LIMIT.total, '한 개 한도가 전체 한도보다 작다');
 
 /* ============================== 8. 파일명 해독 (Database 관리) ========== */
 group('8. 파일명 해독 — 옛 자료를 이름만 보고 정리한다');
