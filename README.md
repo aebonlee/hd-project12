@@ -212,9 +212,16 @@ node test/store.test.js        #  72 통과
 # 서버 모드 어댑터 테스트 — 가짜 Supabase 로 트리거까지 재현
 node test/server.test.js       #  40 통과
 
+# 화면 연기 테스트 — 실제로 브라우저에 띄워 일곱 화면과 권한 경계를 봅니다
+node test/smoke.browser.js     #  25 통과 (playwright 없으면 조용히 건너뜁니다)
+
 # 스키마 검증 — 임시 PostgreSQL 을 띄워 schema.sql 을 실제로 적용해 봅니다
 ./scripts/sqltest/run.sh       # 재실행 안전성 · RLS · 제약 · 트리거
 ```
+
+이 다섯 가지를 `.github/workflows/test.yml` 이 **PR 마다** 돌립니다.
+`main` 브랜치 보호에서 「필수 상태 체크」로 걸 수 있는 체크가 이 `test` 잡입니다
+(저장소 → Settings → Branches → Add branch ruleset).
 
 `scripts/sqltest/run.sh` 는 임시 클러스터를 만들어 쓰고 지웁니다.
 기존 PostgreSQL 설치에 영향이 없고, 운영 데이터베이스에서는 실행되지 않도록
@@ -231,6 +238,7 @@ node test/server.test.js       #  40 통과
 | `js/app.js` | 화면. 판정은 하지 않고 `logic.js` 의 결과를 그리기만 합니다 |
 | `js/seed-data.js` | 샘플 데이터 — `scripts/gen-seed.py` 가 만듭니다. 손으로 고치지 마세요 |
 | `supabase/schema.sql` | 테이블 · 제약 · 트리거 · RLS. 화면과 **같은 규칙**을 서버에서 다시 막습니다 |
+| `test/smoke.browser.js` | 브라우저에 실제로 띄워 화면이 그려지는지 — 규칙 테스트가 못 잡는 자리 |
 
 샘플 데이터의 날짜는 고정 날짜가 아니라 **오늘로부터의 일수**로 담겨 있습니다.
 고정 날짜로 두면 몇 달 뒤 이 데모를 열었을 때 전부 '지연'으로 보입니다.
