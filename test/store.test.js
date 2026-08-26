@@ -109,6 +109,10 @@ ok(up.ok && up.added === 2, '품번 1건에 여러 파일을 한 번에 올린�
 eq(up.kind, '초안', '수행자가 올리면 초안');
 eq(Store.deliverables(RID).map(function (f) { return f.version; }), [1, 2], '버전이 1, 2로 매겨진다');
 
+// 화면이 이 id 로 본문 사본을 보관한다 (js/filestore.js)
+ok(Array.isArray(up.files) && up.files.length === 2 && up.files[0].id,
+   'addFiles 가 만들어진 행을 돌려준다 — 사본 보관용 id');
+
 ok(Store.setStatus(RID, S.REVIEW).ok, '산출물이 있으면 검토로 넘어간다');
 eq(Store.request(RID).submittedAt, Store.today(), '제출일이 자동으로 찍힌다');
 
@@ -203,7 +207,37 @@ eq(Store.archive().filter(function (a) { return a.id === add.rows[2].id; })[0].d
    '보정하면 월도 함께 맞춰진다');
 
 /* ---------------------------------------------------------------- 이력 */
-group('8. 활동 이력');
+group('8. 원본 위치(link) — 화면에서 href 로 쓰이는 값');
+
+// 이 검사는 흐름과 섞이지 않게 새 요청으로 따로 본다.
+// 앞 단계 한복판에 파일을 하나 더 끼워 넣으면 버전·첨부 개수 기대치가 전부 밀린다
+// (실제로 그렇게 넣었다가 완료 메일 첨부 수와 초안 버전이 어긋났다).
+as(REQUESTER);
+var LK = Store.addRequest({
+  partNo: '123456-100998', partName: '링크 시험 부품', model: 'HX220L',
+  requestedAt: Store.today(), dueDate: Store.offToDate(7),
+  requesterEmail: 'hanjihye@hd.example.com'
+}).request.id;
+Store.assign(LK, 'U-W2');
+as('U-W2');
+Store.setStatus(LK, S.WORK);
+
+var bad = Store.addFiles(LK, [{ name: 'x.xlsx', size: 10, link: 'javascript:alert(1)' }]);
+ok(!bad.ok, 'javascript: 주소는 원본 위치로 저장되지 않는다');
+eq(Store.deliverables(LK).length, 0, '거절된 업로드는 표에 아무것도 남기지 않는다');
+
+var good = Store.addFiles(LK, [{ name: 'y.xlsx', size: 10, link: 'https://teams.example.com/y.xlsx' }]);
+ok(good.ok, 'http(s) 주소는 받는다');
+eq(Store.deliverables(LK)[0].link, 'https://teams.example.com/y.xlsx', '원본 위치가 그대로 저장된다');
+eq(Logic.downloadAction(Store.deliverables(LK)[0], false).kind, 'link',
+   '사본이 없어도 원본 위치가 있으면 그리로 보낸다');
+
+Store.addFiles(LK, [{ name: 'z.xlsx', size: 10 }]);
+eq(Logic.downloadAction(Store.deliverables(LK)[1], false).kind, 'none',
+   '사본도 원본 위치도 없으면 받을 길이 없다고 표시한다');
+
+/* ------------------------------------------------------------ 이력 */
+group('9. 활동 이력');
 
 var actions = Store.logs().map(function (g) { return g.action; });
 ok(actions.indexOf('상태 변경') >= 0, '상태 변경이 이력에 남는다');

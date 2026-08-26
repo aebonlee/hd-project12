@@ -77,7 +77,9 @@ async function run() {
     launch.executablePath = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE;
   }
   var browser = await chromium.launch(launch);
-  var page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
+  // acceptDownloads 가 없으면 내려받기 검사에서 아무 일도 일어나지 않는다
+  var ctx = await browser.newContext({ viewport: { width: 1440, height: 1000 }, acceptDownloads: true });
+  var page = await ctx.newPage();
 
   var errors = [];
   page.on('pageerror', function (e) { errors.push(String(e.message)); });
@@ -147,7 +149,10 @@ async function run() {
   await page.waitForTimeout(250);
   ok(!(await page.locator('#newRequestCard').isVisible()), '수행자에게는 등록 폼이 없다');
 
-  console.log('\n6. 좁은 화면에서 가로로 넘치지 않는다');
+  console.log('\n6. 올린 파일을 다시 내려받을 수 있다');
+  await uploadAndDownload();
+
+  console.log('\n7. 좁은 화면에서 가로로 넘치지 않는다');
   await page.setViewportSize({ width: 390, height: 844 });
   await page.waitForTimeout(300);
   var overflow = await page.evaluate(function () {
@@ -157,4 +162,84 @@ async function run() {
 
   eq(errors, [], '끝까지 자바스크립트 오류가 없다');
   await browser.close();
+
+  /**
+   * 업로드 → 사본 보관 → 내려받기 한 바퀴.
+   *
+   * 서버에는 본문을 넣지 않으므로, 내려받기가 되려면 이 브라우저에 사본이 있어야 한다.
+   * 그 사슬이 한 군데라도 끊기면 "올렸는데 받을 수 없는" 상태가 되는데,
+   * 화면은 멀쩡해 보인다 — 실제로 받아 봐야 알 수 있다.
+   *
+   * ⚠ 파일 경로는 ASCII 로 둔다. 한글 이름 경로는 setInputFiles 가 조용히
+   *   빈 채로 넘어가, 앱이 아니라 테스트가 틀린다(그 자리에서 한 번 속았다).
+   */
+  async function uploadAndDownload() {
+    var os = require('os');
+    var tmp = path.join(os.tmpdir(), 'pct-smoke-upload.csv');
+    var body = '품번,품명,표준원가\n123456-100001,붐 실린더 브라켓,128400\n';
+    fs.writeFileSync(tmp, body, 'utf8');
+
+    await page.setViewportSize({ width: 1440, height: 1000 });
+    await page.goto('http://127.0.0.1:' + PORT + '/index.html', { waitUntil: 'networkidle' });
+    await page.waitForTimeout(500);
+    await page.click('.nav-item[data-view="work"]');
+    await page.waitForTimeout(400);
+
+    // 초안을 올릴 수 있는 건(작업중 + 배정됨)을 찾는다
+    var opened = false;
+    var rows = await page.locator('#workTable tbody tr').count();
+    for (var i = 0; i < rows && !opened; i++) {
+      var row = page.locator('#workTable tbody tr').nth(i);
+      if ((await row.innerText()).indexOf('작업중') < 0) continue;
+      await row.locator('button[data-open]').click();
+      await page.waitForTimeout(350);
+      opened = (await page.locator('#dFiles').count()) > 0;
+      if (!opened) await page.click('.modal-head [data-close]');
+    }
+    ok(opened, '초안을 올릴 수 있는 건이 있다');
+    if (!opened) return;
+
+    await page.setInputFiles('#dFiles', tmp);
+    var picked = await page.evaluate(function () {
+      return document.getElementById('dFiles').files.length;
+    });
+    eq(picked, 1, '파일이 입력칸에 담겼다');
+
+    await page.click('#dUpload');
+    await page.waitForTimeout(900);
+    var msg = await page.textContent('#toast');
+    ok(msg.indexOf('등록했습니다') >= 0, '업로드가 받아들여졌다', msg);
+    ok(msg.indexOf('사본') >= 0, '사본을 이 브라우저에 보관했다고 알린다', msg);
+
+    var getBtns = await page.locator('#modalBody [data-get]').count();
+    ok(getBtns >= 1, '올린 파일에 [내려받기] 가 생겼다', getBtns + '개');
+    if (!getBtns) return;
+
+    // 버튼을 눌러도 파일이 안 나오면 여기서 15초를 기다린 뒤 예외로 죽는다.
+    // 그러면 무엇이 틀렸는지가 스택에 묻히므로, 붙잡아서 한 줄로 알린다.
+    var dl = null;
+    try {
+      dl = (await Promise.all([
+        page.waitForEvent('download', { timeout: 15000 }),
+        page.locator('#modalBody [data-get]').first().click()
+      ]))[0];
+    } catch (e) {
+      ok(false, '[내려받기] 를 누르면 파일이 나온다',
+         '15초 안에 내려받기가 시작되지 않았습니다 — 사본 보관이나 저장 경로가 끊겼습니다');
+      return;
+    }
+    eq(dl.suggestedFilename(), 'pct-smoke-upload.csv', '올린 이름 그대로 내려받는다');
+    var got = fs.readFileSync(await dl.path(), 'utf8');
+    eq(got, body, '내려받은 내용이 올린 것과 같다');
+
+    // 사본이 없는 샘플 산출물은 왜 못 받는지 말해야 한다
+    await page.click('.modal-head [data-close]');
+    await page.click('.nav-item[data-view="files"]');
+    await page.waitForTimeout(500);
+    var none = await page.locator('#fileTable tbody tr td .muted').first();
+    ok(await none.count() > 0 ? (await none.getAttribute('title') || '').length > 0 : true,
+       '사본이 없는 파일에는 사유가 붙는다');
+    ok((await page.locator('#copyUsage').innerText()).indexOf('사본') >= 0,
+       '보관 중인 사본 용량을 보여 준다');
+  }
 }
